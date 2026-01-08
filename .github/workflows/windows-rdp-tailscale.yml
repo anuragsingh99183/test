@@ -6,7 +6,7 @@ on:
 jobs:
   rdp:
     runs-on: windows-latest
-    timeout-minutes: 360
+    timeout-minutes: 360   # 6 hours
 
     steps:
       - name: Clone repository to Desktop
@@ -14,7 +14,6 @@ jobs:
         run: |
           $desktop = "C:\Users\runneradmin\Desktop"
           $repoUrl = "https://github.com/${{ github.repository }}.git"
-
           Set-Location $desktop
           git clone $repoUrl
 
@@ -29,9 +28,7 @@ jobs:
           TAILSCALE_AUTHKEY: ${{ secrets.TAILSCALE_AUTHKEY }}
         run: |
           $ts = "C:\Program Files\Tailscale\tailscale.exe"
-
           & $ts up --authkey $env:TAILSCALE_AUTHKEY --hostname "gh-runner-rdp" --accept-dns=false
-
           $ip = & $ts ip -4
           Write-Host "Tailscale IPv4: $ip"
 
@@ -42,14 +39,16 @@ jobs:
           Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 1
 
+          # Ensure RDP service is running
+          Set-Service -Name TermService -StartupType Automatic
+          Start-Service -Name TermService
+
       - name: Set runneradmin password (fixed from secret) and print RDP details
         shell: pwsh
         env:
           RDP_PASSWORD: ${{ secrets.RDP_PASSWORD }}
         run: |
-          if (-not $env:RDP_PASSWORD) {
-            throw "Missing secret: RDP_PASSWORD"
-          }
+          if (-not $env:RDP_PASSWORD) { throw "Missing secret: RDP_PASSWORD" }
 
           Set-LocalUser -Name "runneradmin" -Password (ConvertTo-SecureString $env:RDP_PASSWORD -AsPlainText -Force)
 
@@ -64,8 +63,62 @@ jobs:
           Write-Host "====================="
           Write-Host ""
 
-      - name: Keep runner alive for RDP (2 hours)
+      - name: Install GUI apps (VLC, VS Code, Wireshark, MongoDB, Compass)
         shell: pwsh
         run: |
-          Write-Host "Runner will stay alive for 2 hours. Cancel the job when done."
-          Start-Sleep -Seconds 7200
+          # Winget installs (silent)
+          winget install --id VideoLAN.VLC -e --accept-source-agreements --accept-package-agreements
+          winget install --id Microsoft.VisualStudioCode -e --accept-source-agreements --accept-package-agreements
+
+          # Wireshark (may pull Npcap)
+          try {
+            winget install --id WiresharkFoundation.Wireshark -e --accept-source-agreements --accept-package-agreements
+          } catch {
+            Write-Host "winget Wireshark failed, trying Chocolatey..."
+            Set-ExecutionPolicy Bypass -Scope Process -Force
+            [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.SecurityProtocolType]::Tls12
+            iex ((New-Object System.Net.WebClient).DownloadString('https://community.chocolatey.org/install.ps1'))
+            choco install wireshark -y
+          }
+
+          # MongoDB + Compass
+          # IDs can vary, so we try common ones first.
+          $mongoIds = @("MongoDB.Server", "MongoDB.MongoDBServer")
+          $compassIds = @("MongoDB.Compass.Full", "MongoDB.Compass")
+
+          $installedMongo = $false
+          foreach ($id in $mongoIds) {
+            try {
+              winget install --id $id -e --accept-source-agreements --accept-package-agreements
+              $installedMongo = $true
+              break
+            } catch {
+              Write-Host "MongoDB install failed for id: $id"
+            }
+          }
+          if (-not $installedMongo) {
+            Write-Host "Could not install MongoDB Server via winget IDs tried: $($mongoIds -join ', ')"
+          }
+
+          $installedCompass = $false
+          foreach ($id in $compassIds) {
+            try {
+              winget install --id $id -e --accept-source-agreements --accept-package-agreements
+              $installedCompass = $true
+              break
+            } catch {
+              Write-Host "Compass install failed for id: $id"
+            }
+          }
+          if (-not $installedCompass) {
+            Write-Host "Could not install MongoDB Compass via winget IDs tried: $($compassIds -join ', ')"
+          }
+
+          Write-Host "Installed packages list:"
+          winget list
+
+      - name: Keep runner alive for RDP (6 hours)
+        shell: pwsh
+        run: |
+          Write-Host "Runner will stay alive for 6 hours. Cancel the job when done."
+          Start-Sleep -Seconds 21600
