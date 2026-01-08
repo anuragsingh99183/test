@@ -9,14 +9,6 @@ jobs:
     timeout-minutes: 360   # 6 hours
 
     steps:
-      - name: Clone repository to Desktop
-        shell: pwsh
-        run: |
-          $desktop = "C:\Users\runneradmin\Desktop"
-          $repoUrl = "https://github.com/${{ github.repository }}.git"
-          Set-Location $desktop
-          git clone $repoUrl
-
       - name: Install Tailscale
         shell: pwsh
         run: |
@@ -35,11 +27,18 @@ jobs:
       - name: Enable RDP + firewall
         shell: pwsh
         run: |
-          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0
-          Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
-          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 1
+          Set-ItemProperty `
+            -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' `
+            -Name "fDenyTSConnections" `
+            -Value 0
 
-          # Ensure RDP service is running
+          Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
+
+          Set-ItemProperty `
+            -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' `
+            -Name "UserAuthentication" `
+            -Value 1
+
           Set-Service -Name TermService -StartupType Automatic
           Start-Service -Name TermService
 
@@ -48,9 +47,12 @@ jobs:
         env:
           RDP_PASSWORD: ${{ secrets.RDP_PASSWORD }}
         run: |
-          if (-not $env:RDP_PASSWORD) { throw "Missing secret: RDP_PASSWORD" }
+          if (-not $env:RDP_PASSWORD) {
+            throw "Missing secret: RDP_PASSWORD"
+          }
 
-          Set-LocalUser -Name "runneradmin" -Password (ConvertTo-SecureString $env:RDP_PASSWORD -AsPlainText -Force)
+          Set-LocalUser -Name "runneradmin" `
+            -Password (ConvertTo-SecureString $env:RDP_PASSWORD -AsPlainText -Force)
 
           $ts = "C:\Program Files\Tailscale\tailscale.exe"
           $ip = & $ts ip -4
@@ -63,59 +65,53 @@ jobs:
           Write-Host "====================="
           Write-Host ""
 
-      - name: Install GUI apps (VLC, VS Code, Wireshark, MongoDB, Compass)
+      # ✅ MOVED HERE: clone AFTER RDP is fully ready
+      - name: Clone repository to Desktop
         shell: pwsh
         run: |
-          # Winget installs (silent)
-          winget install --id VideoLAN.VLC -e --accept-source-agreements --accept-package-agreements
+          $desktop = "C:\Users\runneradmin\Desktop"
+          $repoUrl = "https://github.com/${{ github.repository }}.git"
+          Set-Location $desktop
+          git clone $repoUrl
+
+      - name: Install GUI apps + Npcap + WinRAR
+        shell: pwsh
+        run: |
+          # VS Code
           winget install --id Microsoft.VisualStudioCode -e --accept-source-agreements --accept-package-agreements
+          
+          # VLC
+          winget install --id VideoLAN.VLC -e --accept-source-agreements --accept-package-agreements
 
-          # Wireshark (may pull Npcap)
-          try {
-            winget install --id WiresharkFoundation.Wireshark -e --accept-source-agreements --accept-package-agreements
-          } catch {
-            Write-Host "winget Wireshark failed, trying Chocolatey..."
-            Set-ExecutionPolicy Bypass -Scope Process -Force
-            [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.SecurityProtocolType]::Tls12
-            iex ((New-Object System.Net.WebClient).DownloadString('https://community.chocolatey.org/install.ps1'))
-            choco install wireshark -y
-          }
+          # WinRAR
+          winget install --id RARLab.WinRAR -e --accept-source-agreements --accept-package-agreements
 
-          # MongoDB + Compass
-          # IDs can vary, so we try common ones first.
-          $mongoIds = @("MongoDB.Server", "MongoDB.MongoDBServer")
-          $compassIds = @("MongoDB.Compass.Full", "MongoDB.Compass")
+          # # Npcap (REQUIRED for Wireshark)
+          # winget install --id Npcap.Npcap -e --accept-source-agreements --accept-package-agreements
 
-          $installedMongo = $false
-          foreach ($id in $mongoIds) {
-            try {
-              winget install --id $id -e --accept-source-agreements --accept-package-agreements
-              $installedMongo = $true
-              break
-            } catch {
-              Write-Host "MongoDB install failed for id: $id"
-            }
-          }
-          if (-not $installedMongo) {
-            Write-Host "Could not install MongoDB Server via winget IDs tried: $($mongoIds -join ', ')"
-          }
+          # # Wireshark (now works because Npcap is present)
+          # winget install --id WiresharkFoundation.Wireshark -e --accept-source-agreements --accept-package-agreements
 
-          $installedCompass = $false
-          foreach ($id in $compassIds) {
-            try {
-              winget install --id $id -e --accept-source-agreements --accept-package-agreements
-              $installedCompass = $true
-              break
-            } catch {
-              Write-Host "Compass install failed for id: $id"
-            }
-          }
-          if (-not $installedCompass) {
-            Write-Host "Could not install MongoDB Compass via winget IDs tried: $($compassIds -join ', ')"
-          }
+          # # MongoDB Server
+          # $mongoIds = @("MongoDB.Server", "MongoDB.MongoDBServer")
+          # foreach ($id in $mongoIds) {
+          #   try {
+          #     winget install --id $id -e --accept-source-agreements --accept-package-agreements
+          #     break
+          #   } catch {}
+          # }
 
-          Write-Host "Installed packages list:"
-          winget list
+          # # MongoDB Compass
+          # $compassIds = @("MongoDB.Compass.Full", "MongoDB.Compass")
+          # foreach ($id in $compassIds) {
+          #   try {
+          #     winget install --id $id -e --accept-source-agreements --accept-package-agreements
+          #     break
+          #   } catch {}
+          # }
+
+          # Write-Host "Installed applications:"
+          # winget list
 
       - name: Keep runner alive for RDP (6 hours)
         shell: pwsh
