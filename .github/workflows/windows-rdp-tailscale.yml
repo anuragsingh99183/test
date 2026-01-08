@@ -12,12 +12,12 @@ jobs:
       - name: Clone repository to Desktop
         shell: pwsh
         run: |
-         $desktop = "C:\Users\runneradmin\Desktop"
-         $repoUrl = "https://github.com/${{ github.repository }}.git"
+          $desktop = "C:\Users\runneradmin\Desktop"
+          $repoUrl = "https://github.com/${{ github.repository }}.git"
 
-         cd $desktop
-         git clone $repoUrl
-    
+          Set-Location $desktop
+          git clone $repoUrl
+
       - name: Install Tailscale
         shell: pwsh
         run: |
@@ -30,38 +30,28 @@ jobs:
         run: |
           $ts = "C:\Program Files\Tailscale\tailscale.exe"
 
-          # Bring up Tailscale (ephemeral node recommended via key settings)
           & $ts up --authkey $env:TAILSCALE_AUTHKEY --hostname "gh-runner-rdp" --accept-dns=false
 
-          # Show Tailscale IPv4 for RDP
           $ip = & $ts ip -4
           Write-Host "Tailscale IPv4: $ip"
 
       - name: Enable RDP + firewall
         shell: pwsh
         run: |
-          # Enable Remote Desktop
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0
-
-          # Allow RDP through Windows Firewall
           Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
-
-          # Enforce Network Level Authentication (recommended)
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 1
 
-      - name: Set runneradmin password (random) and print credentials
+      - name: Set runneradmin password (fixed from secret) and print RDP details
         shell: pwsh
+        env:
+          RDP_PASSWORD: ${{ secrets.RDP_PASSWORD }}
         run: |
-          # Generate a strong random password
-          Add-Type -AssemblyName System.Web
-          $pwd = [System.Web.Security.Membership]::GeneratePassword(24, 6)
+          if (-not $env:RDP_PASSWORD) {
+            throw "Missing secret: RDP_PASSWORD"
+          }
 
-          # Mask it in logs after printing is not possible, so we mask first then print.
-          # This will hide the password value in subsequent log lines if repeated.
-          Write-Host "::add-mask::$pwd"
-
-          # Set password for the admin user on GitHub hosted Windows runner
-          Set-LocalUser -Name "runneradmin" -Password (ConvertTo-SecureString $pwd -AsPlainText -Force)
+          Set-LocalUser -Name "runneradmin" -Password (ConvertTo-SecureString $env:RDP_PASSWORD -AsPlainText -Force)
 
           $ts = "C:\Program Files\Tailscale\tailscale.exe"
           $ip = & $ts ip -4
@@ -70,7 +60,7 @@ jobs:
           Write-Host "==== RDP DETAILS ===="
           Write-Host "Host (Tailscale IP): $ip"
           Write-Host "Username: runneradmin"
-          Write-Host "Password: $pwd"
+          Write-Host "Password: (set from secret RDP_PASSWORD)"
           Write-Host "====================="
           Write-Host ""
 
